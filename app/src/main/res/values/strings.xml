@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">NewsRSS</string>
+    <string name="ultime_notizie">Ultime Notizie</string>
+    <string name="notizie_vecchie">Notizie vecchie</string>
+</resources>
