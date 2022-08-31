@@ -14,10 +14,13 @@ import android.widget.Toast;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.ArrayList;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
+
 
 public class ActivityArticle extends AppCompatActivity {
     Bundle extras;
@@ -57,6 +60,8 @@ public class ActivityArticle extends AppCompatActivity {
     public InputStream getInputStream(URL url){
         try{
             HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
+            urlConnection.setConnectTimeout(10);
+            urlConnection.setRequestProperty("User-Agent", "irrelevant");
             int responseCode = urlConnection.getResponseCode();
             if (responseCode < HttpURLConnection.HTTP_BAD_REQUEST){
                 return urlConnection.getInputStream();
@@ -93,18 +98,44 @@ public class ActivityArticle extends AppCompatActivity {
         @Override
         protected Exception doInBackground(Integer... integers) {
             try{
-                // html parser
+                // html parse text
                 Document document = Jsoup.connect(bodyUrl).get();
-                Elements text_elements = document.getElementsByTag("p");
+                Elements p_elements = document.getElementsByTag("p");
+                int idx_max = -1;
+                int max_length = 0;
+                for (int i=0; i<p_elements.size(); i++){
+                    if (p_elements.get(i).text().length() > max_length){
+                        max_length = p_elements.get(i).text().length();
+                        idx_max = i;
+                    }
+                }
+                String query = "div:has(p)";
+                Elements divs = document.select(query);
+                int div_idx = 0;
+                for (int i=0; i<divs.size(); i++){
+                    Element div_p = divs.get(i);
+                    Elements ps = div_p.select("p");
+                    for (int j=0; j< ps.size(); j++){
+                        if (ps.get(j).text().equals(p_elements.get(idx_max).text())) {
+                            div_idx = i;
+                            break;
+                        }
+                    }
+                    if (div_idx != 0){
+                        break;
+                    }
+                }
+                p_elements = divs.get(div_idx).select("p");
+                bodyText = p_elements.text();
+
+                // set article image
                 Elements article_image = document.getElementsByTag("img");
-                bodyText = text_elements.text();
                 URL url = new URL(imageUrl);
                 InputStream inputStream = getInputStream(url);
                 bitmap = BitmapFactory.decodeStream(inputStream);
             }
             catch (Exception exc){
-                Toast toast = Toast.makeText(ActivityArticle.this, exc.getMessage(), Toast.LENGTH_LONG);
-                toast.show();
+                exception = exc;
             }
 
             return exception;
@@ -116,13 +147,15 @@ public class ActivityArticle extends AppCompatActivity {
 
             // set text to textView
             bodyView.setText(bodyText);
-            if (bitmap.getHeight() > 200) {
-                imageView.setImageBitmap(bitmap);
-            }
-            else{
+            if (bitmap != null) {
+                if (bitmap.getHeight() > 200) {
+                    imageView.setImageBitmap(bitmap);
+                } else {
+                    imageView.setImageBitmap(null);
+                }
+            } else {
                 imageView.setImageBitmap(null);
             }
-
             progressDialog.dismiss();
         }
     }
