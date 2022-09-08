@@ -7,9 +7,9 @@
         app:showAsAction="ifRoom"
         android:title="Add">
     </item>
-<!--    <item-->
-<!--        android:id="@+id/action_settings"-->
-<!--        app:showAsAction="never"-->
-<!--        android:title="Settings">-->
-<!--    </item>-->
+    <item
+        android:id="@+id/action_remove"
+        android:icon="@android:drawable/ic_menu_delete"
+        android:title="Remove"
+        app:showAsAction="ifRoom"></item>
 </menu>

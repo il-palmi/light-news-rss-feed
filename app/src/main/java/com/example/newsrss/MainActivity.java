@@ -2,63 +2,85 @@ package com.example.newsrss;
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
+import androidx.fragment.app.DialogFragment;
+import androidx.room.Room;
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
+import android.annotation.SuppressLint;
 import android.app.ProgressDialog;
-import android.content.Context;
-import android.content.Intent;
-import android.graphics.Color;
-import android.graphics.Typeface;
 import android.os.AsyncTask;
 import android.os.Bundle;
 import android.view.Menu;
-import android.view.View;
+import android.view.MenuItem;
 import android.widget.LinearLayout;
 import android.widget.TextView;
-import android.widget.Toast;
 
-import org.jsoup.Jsoup;
-import org.jsoup.nodes.Document;
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
 import org.xmlpull.v1.XmlPullParserFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
-import java.util.Locale;
-import java.util.Objects;
-import java.util.zip.GZIPInputStream;
+import java.util.HashMap;
+import java.util.List;
 
 import javax.net.ssl.HttpsURLConnection;
 
 
-public class MainActivity extends AppCompatActivity {
-    ArrayList<String> titles;
-    ArrayList<String> subtitles;
-    ArrayList<String> links;
-    ArrayList<String> image_links;
-    ArrayList<String> newspaperNames;
-    LinearLayout latestNewsLayout;
+public class MainActivity
+        extends AppCompatActivity
+        implements AddFeedDialog.AddFeedDialogListener,
+        RemoveFeedDialog.RemoveFeedDialogListener {
+    ArrayList<HashMap<String, String>> articles = new ArrayList<>();
+
+    SwipeRefreshLayout swipeRefreshLayout;
+    LinearLayout newsLayout;
+
+    FeedDatabase db;
+    FeedDatabase.FeedDatabaseDao feedDao;
+    List<FeedDatabase.Feed> feeds;
+
     String userAgent = "Mozilla/5.0 (Windows NT 6.1; WOW64; rv:221.0) Gecko/20100101 Firefox/31.0";
+    int connectionTimeout = 10; // seconds
+
+    // Overrides
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        titles = new ArrayList<>();
-        subtitles = new ArrayList<>();
-        links = new ArrayList<>();
-        image_links = new ArrayList<>();
-        newspaperNames = new ArrayList<>();
-        latestNewsLayout = findViewById(R.id.newsLayout);
+        newsLayout = findViewById(R.id.newsLayout);
 
         // toolbar
         Toolbar toolbar = findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
+
+        // swipe refresh setup
+        swipeRefreshLayout = findViewById(R.id.swipeRefresh);
+        swipeRefreshLayout.setOnRefreshListener(
+                new SwipeRefreshLayout.OnRefreshListener() {
+                    @Override
+                    public void onRefresh() {
+                        newsLayout.removeAllViews();
+                        articles.clear();
+                        feeds = feedDao.getAll();
+                        new BackgroundFetch().execute();
+                    }
+                }
+        );
+
+        // database
+        db = Room.databaseBuilder(getApplicationContext(),
+                FeedDatabase.class,
+                "newsRSS")
+                .allowMainThreadQueries()
+                .build();
+        feedDao = db.feedDatabaseDao();
+        feeds = feedDao.getAll();
 
         // fetch rss
         new BackgroundFetch().execute();
@@ -71,10 +93,43 @@ public class MainActivity extends AppCompatActivity {
         return true;
     }
 
+    @SuppressLint("NonConstantResourceId")
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        // Handle item selection
+        switch (item.getItemId()) {
+            case R.id.action_add:
+                ask_new_feed();
+                return true;
+            case R.id.action_remove:
+                remove_feed();
+                return true;
+            default:
+                return super.onOptionsItemSelected(item);
+        }
+    }
+
+    @Override
+    public void onAddFeedDialogPositiveClick(DialogFragment dialog, String feedName, String feedUrl) {
+        // save new feed
+        FeedDatabase.Feed new_feed = new FeedDatabase.Feed();
+        new_feed.feedName = feedName;
+        new_feed.feedUrl = feedUrl;
+        feedDao.insert(new_feed);
+    }
+
+    @Override
+    public void onRemoveFeedDialogSelect(DialogFragment dialog, String selected_feed){
+        // remove feed
+        feedDao.deleteByUrl(selected_feed);
+    }
+
+    // Methods
+
     public InputStream getInputStream(URL url){
         try{
             HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
-            urlConnection.setConnectTimeout(100);
+            urlConnection.setConnectTimeout(connectionTimeout * 1000);
             urlConnection.setRequestProperty("User-Agent", "irrelevant");
             int responseCode = urlConnection.getResponseCode();
             if (responseCode < HttpsURLConnection.HTTP_BAD_REQUEST){
@@ -82,7 +137,7 @@ public class MainActivity extends AppCompatActivity {
                     String newUrl = urlConnection.getHeaderField("Location");
                     url = new URL(newUrl);
                     HttpsURLConnection httpsURLConnection = (HttpsURLConnection) url.openConnection();
-                    httpsURLConnection.setConnectTimeout(50);
+                    httpsURLConnection.setConnectTimeout(connectionTimeout * 1000);
                     httpsURLConnection.setRequestProperty("User-Agent", userAgent);
                     responseCode = httpsURLConnection.getResponseCode();
                     if (responseCode > HttpURLConnection.HTTP_BAD_REQUEST) {
@@ -102,13 +157,35 @@ public class MainActivity extends AppCompatActivity {
                 public void run() {
                     TextView text = new TextView(MainActivity.this);
                     text.setText(exc.getMessage());
-                    latestNewsLayout.addView(text);
+                    newsLayout.addView(text);
                 }
             });
             return null;
 
         }
     }
+
+    private void ask_new_feed() {
+        DialogFragment addFeedDialog = new AddFeedDialog();
+        addFeedDialog.show(getSupportFragmentManager(), "dialog");
+
+    }
+
+    private void remove_feed() {
+        ArrayList<String> feedNames = new ArrayList<String>();
+        ArrayList<String> feedUrls = new ArrayList<String>();
+        List<FeedDatabase.Feed> feeds = feedDao.getAll();
+
+        for (FeedDatabase.Feed feed: feeds){
+            feedNames.add(feed.feedName);
+            feedUrls.add(feed.feedUrl);
+        }
+
+        DialogFragment removeFeedDialog = new RemoveFeedDialog(feedNames, feedUrls);
+        removeFeedDialog.show(getSupportFragmentManager(), "dialog");
+    }
+
+    // Background tasks
 
     public class BackgroundFetch extends AsyncTask<Integer, Void, Exception>{
 
@@ -119,86 +196,97 @@ public class MainActivity extends AppCompatActivity {
         protected void onPreExecute() {
             super.onPreExecute();
             progressDialog.setMessage("Loading RSS feed...");
-            progressDialog.show();
+//            progressDialog.show();
+            swipeRefreshLayout.setRefreshing(true);
+
         }
 
         @Override
         protected Exception doInBackground(Integer... integers) {
-            try{
-//                URL url = new URL("http://www.repubblica.it/rss/esteri/rss2.0.xml");
-                URL url = new URL("http://feed.lastampa.it/esteri.rss");
-//                URL url = new URL("https://www.ilfoglio.it/esteri/rss.xml");
-//                URL url = new URL("https://weeeopen.polito.it/rss");
+            for (FeedDatabase.Feed feed: feeds){
+                try{
+                    URL url = new URL(feed.feedUrl);
 
-                // generate xml parser
-                XmlPullParserFactory factory = XmlPullParserFactory.newInstance();
-                factory.setNamespaceAware(false);
-                XmlPullParser xpp = factory.newPullParser();
-                xpp.setInput(getInputStream(url), "UTF_8");
+                    // generate xml parser
+                    XmlPullParserFactory factory = XmlPullParserFactory.newInstance();
+                    factory.setNamespaceAware(false);
+                    XmlPullParser xpp = factory.newPullParser();
+                    xpp.setInput(getInputStream(url), "UTF_8");
 
-                boolean insideItem = false;
-                boolean insideChannel = false;
-                boolean foundSubtitle = false;
-                int eventType = xpp.getEventType();
+                    boolean insideItem = false;
+                    boolean insideChannel = false;
+                    int eventType = xpp.getEventType();
 
-                String newspaper = "";
-                while (eventType != XmlPullParser.END_DOCUMENT){
-                    if (eventType == XmlPullParser.START_TAG){
-                        if (xpp.getName().equalsIgnoreCase("item")) {
-                            insideItem = true;
-                        }
-                        if (xpp.getName().equalsIgnoreCase("channel")) {
-                            insideChannel = true;
-                        }
-                        else if (xpp.getName().equalsIgnoreCase("title")){
-                            if (insideItem){
-                                titles.add(xpp.nextText());
-                                newspaperNames.add(newspaper);
-                            } else if (insideChannel){
-                                newspaper = xpp.nextText();
+                    String newspaper = "";
+                    HashMap<String, String> article = null;
+                    while (eventType != XmlPullParser.END_DOCUMENT){
+                        if (eventType == XmlPullParser.START_TAG){
+                            String name = xpp.getName().toLowerCase();
+                            switch(name){
+                                case "item":
+                                    insideItem = true;
+                                    article = new HashMap<>();
+                                    article.put("title", "");
+                                    article.put("subtitle", "");
+                                    article.put("link", "");
+                                    article.put("image_link", "");
+                                    article.put("newspaper", "");
+                                    article.put("date", "");
+                                    break;
+                                case "channel":
+                                    insideChannel = true;
+                                    break;
+                                case "title":
+                                    if (insideItem){
+                                        article.put("title", xpp.nextText());
+                                        article.put("newspaper", newspaper);
+                                    } else if (insideChannel){
+                                        newspaper = xpp.nextText();
+                                    }
+                                    break;
+                                case "atom:summary":
+                                    if (insideItem){
+                                        article.put("subtitle", xpp.nextText());
+                                    }
+                                    break;
+                                case "pubDate":
+                                    if (insideItem){
+                                        article.put("date", xpp.nextText());
+                                    }
+                                    break;
+                                case "link":
+                                    if (insideItem) {
+                                        article.put("link", xpp.nextText());
+                                    }
+                                    break;
+                                case "media:content":
+                                case "enclosure":
+                                    if (insideItem) {
+                                        article.put("image_link", xpp.getAttributeValue("", "url"));
+                                    }
+                                    break;
                             }
                         }
-                        else if (xpp.getName().equalsIgnoreCase("atom:summary")){
-                            if (insideItem){
-                                String asd = xpp.nextText();
-                                subtitles.add(asd);
-                                foundSubtitle = true;
+                        else if (eventType == XmlPullParser.END_TAG) {
+                            String tag = xpp.getName().toLowerCase();
+                            switch (tag) {
+                                case "item":
+                                    insideItem = false;
+                                    articles.add(article);
+                                    break;
+                                case "channel":
+                                    insideChannel = false;
+                                    break;
+                                default:
+                                    break;
                             }
                         }
-                        else if (xpp.getName().equalsIgnoreCase("link")){
-                            if (insideItem) {
-                                links.add(xpp.nextText());
-                            }
-                        }
-                        else if (xpp.getName().equalsIgnoreCase("media:content")){
-                            if (insideItem) {
-                                image_links.add(xpp.getAttributeValue("", "url"));
-                            }
-                        }
-                        else if (xpp.getName().equalsIgnoreCase("enclosure")){
-                            if (insideItem) {
-                                image_links.add(xpp.getAttributeValue("", "url"));
-                            }
-                        }
-                        if (image_links.size() < titles.size()){
-                            image_links.add("");
-                        }
+
+                        eventType = xpp.next();
                     }
-                    else if (eventType == XmlPullParser.END_TAG && xpp.getName().equalsIgnoreCase("item")){
-                        insideItem = false;
-                        if (!foundSubtitle){
-                            subtitles.add("");
-                        }
-                        foundSubtitle = false;
-                    }
-                    else if (eventType == XmlPullParser.END_TAG && xpp.getName().equalsIgnoreCase("channel")){
-                        insideChannel = false;
-                    }
-
-                    eventType = xpp.next();
+                } catch (XmlPullParserException | IOException | IllegalArgumentException exc){
+                    exception = exc;
                 }
-            } catch (XmlPullParserException | IOException | IllegalArgumentException exc){
-                exception = exc;
             }
 
             return exception;
@@ -210,91 +298,35 @@ public class MainActivity extends AppCompatActivity {
 
             // add articles to view
 
-            for (int i=0; i<titles.size(); i++){
-                News text = new News(MainActivity.this,
-                        titles.get(i),
-                        subtitles.get(i),
-                        links.get(i),
-                        image_links.get(i),
-                        newspaperNames.get(i));
-                latestNewsLayout.addView(text);
+            for (HashMap<String, String> article: articles){
+                News news_article = new News(MainActivity.this,
+                        article.get("title"),
+                        article.get("subtitle"),
+                        article.get("link"),
+                        article.get("image_link"),
+                        article.get("newspaper"));
+                newsLayout.addView(news_article);
             }
 
-            progressDialog.dismiss();
+            swipeRefreshLayout.setRefreshing(false);
         }
     }
-}
 
-class News extends LinearLayout {
-    TextView titleView = new TextView(this.getContext());
-    TextView newspaperView = new TextView(this.getContext());
-    String titleText;
-    String subtitleText;
-    String bodyText = "No text";
-    String articleLink;
-    String imageLink;
-    String newspaperName;
-    Context context;
-
-    public News(Context parent_context, String title, String subtitle, String link, String image_link, String newspaper_name){
-        super(parent_context);
-        context = parent_context;
-        titleText = title;
-        subtitleText = subtitle;
-        articleLink = link;
-        imageLink = image_link;
-        newspaperName = newspaper_name;
-        setOnClickListener(onClick());
-
-        // graphics parameters
-        setOrientation(LinearLayout.VERTICAL);
-        LayoutParams params = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
-        params.setMargins(30,10,30,10);
-        setLayoutParams(params);
-
-        // Newspaper name label
-        newspaperView.setText(newspaperName);
-        newspaperView.setTypeface(newspaperView.getTypeface(), Typeface.BOLD_ITALIC);
-        addView(newspaperView);
-
-        // Title
-        titleView.setText(title);
-        titleView.setTextSize(24);
-        titleView.setTypeface(titleView.getTypeface(), Typeface.BOLD_ITALIC);
-        addView(titleView);
-
-        // Subtitle
-        if (!subtitleText.equals("")){
-            TextView subtitleView = new TextView(context);
-            subtitleView.setText(subtitle.replace("\n", ""));
-            addView(subtitleView);
-        }
-
-        // Spacer
-        TextView lineSpacer = new TextView(context);
-        lineSpacer.setWidth(this.getWidth());
-        LayoutParams lp = new LayoutParams(LayoutParams.MATCH_PARENT, 1);
-        lp.setMargins(0, 15, 0, 0);
-        lineSpacer.setLayoutParams(lp);
-        lineSpacer.setBackgroundColor(Color.BLACK);
-
-        addView(lineSpacer);
-    }
-
-    OnClickListener onClick(){
-        OnClickListener listener = new OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                Intent intent = new Intent(context, ActivityArticle.class);
-                intent.putExtra("titleText", titleText);
-                intent.putExtra("subtitleText", subtitleText);
-                intent.putExtra("bodyText", bodyText);
-                intent.putExtra("articleLink", articleLink);
-                intent.putExtra("imageLink", imageLink);
-                context.startActivity(intent);
-            }
-        };
-        return listener;
-    }
+//    public class DatabaseAccess extends AsyncTask<Integer, Void, Exception>{
+//        @Override
+//        protected void onPreExecute(){
+//
+//        }
+//
+//        @Override
+//        protected Exception doInBackground(Integer... integers){
+//
+//        }
+//
+//        @Override
+//        protected void onPostExecute(Exception s){
+//
+//        }
+//    }
 
 }
